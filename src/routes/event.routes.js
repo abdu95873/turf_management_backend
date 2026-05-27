@@ -1,0 +1,14 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const event_controller_1 = require("../controllers/event.controller");
+const auth_middleware_1 = require("../middlewares/auth.middleware");
+const rbac_middleware_1 = require("../middlewares/rbac.middleware");
+const roles_1 = require("../constants/roles");
+const router = (0, express_1.Router)();
+router.get("/", event_controller_1.listPublicEvents);
+router.get("/manage", auth_middleware_1.requireAuth, (0, rbac_middleware_1.requireRoles)(roles_1.ROLES.OWNER, roles_1.ROLES.ADMIN), event_controller_1.listManagedEvents);
+router.post("/manage", auth_middleware_1.requireAuth, (0, rbac_middleware_1.requireRoles)(roles_1.ROLES.OWNER, roles_1.ROLES.ADMIN), event_controller_1.createEvent);
+router.patch("/manage/:eventId", auth_middleware_1.requireAuth, (0, rbac_middleware_1.requireRoles)(roles_1.ROLES.OWNER, roles_1.ROLES.ADMIN), event_controller_1.updateEvent);
+router.delete("/manage/:eventId", auth_middleware_1.requireAuth, (0, rbac_middleware_1.requireRoles)(roles_1.ROLES.OWNER, roles_1.ROLES.ADMIN), event_controller_1.deleteEvent);
+exports.default = router;

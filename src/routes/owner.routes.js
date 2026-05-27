@@ -1,0 +1,16 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const owner_controller_1 = require("../controllers/owner.controller");
+const auth_middleware_1 = require("../middlewares/auth.middleware");
+const rbac_middleware_1 = require("../middlewares/rbac.middleware");
+const roles_1 = require("../constants/roles");
+const router = (0, express_1.Router)();
+router.use(auth_middleware_1.requireAuth, (0, rbac_middleware_1.requireRoles)(roles_1.ROLES.OWNER));
+router.get("/staff", owner_controller_1.listStaff);
+router.post("/staff", owner_controller_1.createStaff);
+router.patch("/staff/:staffId", owner_controller_1.updateStaff);
+router.patch("/staff/:staffId/status", owner_controller_1.updateStaffStatus);
+router.delete("/staff/:staffId", owner_controller_1.deleteStaff);
+router.get("/earnings", owner_controller_1.getOwnerEarnings);
+exports.default = router;

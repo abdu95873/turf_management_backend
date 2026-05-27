@@ -1,0 +1,11 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const review_controller_1 = require("../controllers/review.controller");
+const auth_middleware_1 = require("../middlewares/auth.middleware");
+const permissions_1 = require("../constants/permissions");
+const rbac_middleware_1 = require("../middlewares/rbac.middleware");
+const router = (0, express_1.Router)();
+router.get("/resource/:resourceId", review_controller_1.listResourceReviews);
+router.post("/", auth_middleware_1.requireAuth, (0, rbac_middleware_1.requirePermission)(permissions_1.PERMISSIONS.BOOKING_CREATE), review_controller_1.createReview);
+exports.default = router;

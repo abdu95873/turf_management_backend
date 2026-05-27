@@ -1,0 +1,14 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const resource_controller_1 = require("../controllers/resource.controller");
+const permissions_1 = require("../constants/permissions");
+const auth_middleware_1 = require("../middlewares/auth.middleware");
+const rbac_middleware_1 = require("../middlewares/rbac.middleware");
+const router = (0, express_1.Router)();
+router.get("/", resource_controller_1.listResources);
+router.get("/:resourceId", resource_controller_1.getResourceDetails);
+router.post("/", auth_middleware_1.requireAuth, (0, rbac_middleware_1.requirePermission)(permissions_1.PERMISSIONS.RESOURCE_MANAGE), resource_controller_1.createResource);
+router.patch("/:resourceId/price", auth_middleware_1.requireAuth, (0, rbac_middleware_1.requirePermission)(permissions_1.PERMISSIONS.PRICE_MANAGE), resource_controller_1.updateResourcePrice);
+router.patch("/:resourceId/settings", auth_middleware_1.requireAuth, (0, rbac_middleware_1.requirePermission)(permissions_1.PERMISSIONS.SLOT_MANAGE), resource_controller_1.updateResourceSettings);
+exports.default = router;
