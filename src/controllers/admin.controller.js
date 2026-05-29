@@ -54,14 +54,38 @@ async function getCommission(_req, res) {
     const settings = await getOrCreateSettings();
     res.json({ commissionRate: settings.commissionRate });
 }
-async function getPlatformStats(_req, res) {
-    const [totalBookings, activeUsers, activeOwners, totalResources] = await Promise.all([
-        Booking_1.BookingModel.countDocuments(),
+function buildBookingDateMatch(from, to) {
+    if (!from && !to) {
+        return {};
+    }
+    const bookingDate = {};
+    if (from) {
+        bookingDate.$gte = String(from);
+    }
+    if (to) {
+        bookingDate.$lte = String(to);
+    }
+    return { bookingDate };
+}
+async function getPlatformStats(req, res) {
+    const from = typeof req.query.from === "string" ? req.query.from.trim() : "";
+    const to = typeof req.query.to === "string" ? req.query.to.trim() : "";
+    const dateMatch = buildBookingDateMatch(from, to);
+    const [totalBookings, activeUsers, activeOwners, totalResources, bookingStatusAgg, paymentPaidAgg, paymentRefundAgg, paidPayments, refundPayments] = await Promise.all([
+        Booking_1.BookingModel.countDocuments(dateMatch),
         User_1.UserModel.countDocuments({ isActive: true, role: "user" }),
         User_1.UserModel.countDocuments({ isActive: true, role: "owner" }),
         Resource_1.ResourceModel.countDocuments(),
-    ]);
-    const [paymentPaidAgg, paymentRefundAgg, paidPayments, refundPayments] = await Promise.all([
+        Booking_1.BookingModel.aggregate([
+            { $match: dateMatch },
+            {
+                $group: {
+                    _id: "$bookingStatus",
+                    totalAmount: { $sum: "$amount" },
+                    count: { $sum: 1 },
+                },
+            },
+        ]),
         Payment_1.PaymentModel.aggregate([
             { $match: { status: "paid" } },
             { $group: { _id: null, total: { $sum: "$amount" } } },
@@ -73,17 +97,26 @@ async function getPlatformStats(_req, res) {
         Payment_1.PaymentModel.countDocuments({ status: "paid" }),
         Payment_1.PaymentModel.countDocuments({ status: "refunded" }),
     ]);
-    // Fallback for legacy data without payment rows.
-    const bookingRevenueAgg = await Booking_1.BookingModel.aggregate([
-        { $match: { paymentStatus: "paid" } },
-        { $group: { _id: null, total: { $sum: "$amount" } } },
-    ]);
-    const bookingRefundAgg = await Booking_1.BookingModel.aggregate([
-        { $match: { paymentStatus: "refunded" } },
-        { $group: { _id: null, total: { $sum: "$amount" } } },
-    ]);
-    const totalRevenue = paymentPaidAgg[0]?.total ?? bookingRevenueAgg[0]?.total ?? 0;
-    const totalRefund = paymentRefundAgg[0]?.total ?? bookingRefundAgg[0]?.total ?? 0;
+    const byStatus = {
+        confirmed: { count: 0, totalAmount: 0 },
+        pending: { count: 0, totalAmount: 0 },
+        no_show: { count: 0, totalAmount: 0 },
+        refunded: { count: 0, totalAmount: 0 },
+        cancelled: { count: 0, totalAmount: 0 },
+    };
+    for (const row of bookingStatusAgg) {
+        if (byStatus[row._id]) {
+            byStatus[row._id] = { count: row.count, totalAmount: row.totalAmount };
+        }
+    }
+    const confirmed = byStatus.confirmed.totalAmount;
+    const pending = byStatus.pending.totalAmount;
+    const noShow = byStatus.no_show.totalAmount;
+    const grossRevenue = confirmed + pending + noShow;
+    const netRevenue = confirmed + noShow;
+    const totalRefund = byStatus.refunded.totalAmount ||
+        paymentRefundAgg[0]?.total ||
+        0;
     res.json({
         totalBookings,
         activeUsers,
@@ -91,8 +124,12 @@ async function getPlatformStats(_req, res) {
         totalResources,
         paidPayments,
         refundPayments,
-        totalRevenue,
+        totalRevenue: grossRevenue,
+        grossRevenue,
+        netRevenue,
         totalRefund,
+        earnings: byStatus,
+        dateFilter: { from: from || null, to: to || null },
     });
 }
 async function listOwners(_req, res) {

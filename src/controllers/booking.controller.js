@@ -10,40 +10,53 @@ exports.createManagedBooking = createManagedBooking;
 exports.updateBookingStatus = updateBookingStatus;
 exports.submitManualPayment = submitManualPayment;
 exports.reviewManualPayment = reviewManualPayment;
+exports.recordBookingPayment = recordBookingPayment;
 exports.downloadInvoice = downloadInvoice;
 const zod_1 = require("zod");
 const Booking_1 = require("../models/Booking");
 const Payment_1 = require("../models/Payment");
+const ManualPaymentTransaction_1 = require("../models/ManualPaymentTransaction");
 const Slot_1 = require("../models/Slot");
 const Resource_1 = require("../models/Resource");
 const User_1 = require("../models/User");
 const roles_1 = require("../constants/roles");
 const userQuery_1 = require("../utils/userQuery");
 const booking_service_1 = require("../services/booking.service");
+const manualPayment_service_1 = require("../services/manualPayment.service");
 const createBookingSchema = zod_1.z.object({
     slotId: zod_1.z.string(),
     idempotencyKey: zod_1.z.string().min(8),
 });
 const updateStatusSchema = zod_1.z.object({
     bookingStatus: zod_1.z.enum(["confirmed", "cancelled", "refunded", "no_show"]),
-    paymentStatus: zod_1.z.enum(["pending", "paid", "failed", "refunded", "manual_pending", "awaiting_approval"]).optional(),
-    transactionId: zod_1.z.string().trim().min(4).max(40).optional(),
-    note: zod_1.z.string().trim().max(300).optional(),
+    paymentStatus: zod_1.z.enum(["pending", "paid", "failed", "refunded", "manual_pending", "partial_paid", "awaiting_approval"]).optional(),
 });
 const manualPaymentSchema = zod_1.z.object({
-    transactionId: zod_1.z.string().trim().min(4).max(40),
+    amount: zod_1.z.number().positive(),
+    paymentMethodCode: zod_1.z.string().trim().min(2).max(32),
+    transactionId: zod_1.z.string().trim().max(40).optional(),
     note: zod_1.z.string().trim().max(300).optional(),
 });
+const recordPaymentSchema = manualPaymentSchema;
 const reviewManualPaymentSchema = zod_1.z.object({
     action: zod_1.z.enum(["approve", "reject"]),
+    manualPaymentId: zod_1.z.string().optional(),
     note: zod_1.z.string().trim().max(300).optional(),
 });
-const createManagedBookingSchema = zod_1.z.object({
-    userId: zod_1.z.string(),
+const createManagedBookingSchema = zod_1.z
+    .object({
+    userId: zod_1.z.string().optional(),
+    guestName: zod_1.z.string().trim().min(2).max(80).optional(),
+    guestPhone: zod_1.z.string().trim().min(6).max(20).optional(),
     slotId: zod_1.z.string(),
     idempotencyKey: zod_1.z.string().min(8),
-    transactionId: zod_1.z.string().trim().min(4).max(40),
+    amount: zod_1.z.number().positive(),
+    paymentMethodCode: zod_1.z.string().trim().min(2).max(32),
+    transactionId: zod_1.z.string().trim().max(40).optional(),
     note: zod_1.z.string().trim().max(300).optional(),
+})
+    .refine((data) => Boolean(data.userId) || (Boolean(data.guestName) && Boolean(data.guestPhone)), {
+    message: "Select a registered customer or enter walk-in name and phone",
 });
 async function getManagedResourceIds(user) {
     if (user.role === "owner") {
@@ -103,7 +116,7 @@ async function listMyBookings(req, res) {
         return;
     }
     const bookings = await Booking_1.BookingModel.find({ userId: req.user.id }).sort({ createdAt: -1 });
-    res.json(bookings);
+    res.json(await (0, manualPayment_service_1.attachManualPayments)(bookings));
 }
 async function cancelMyBooking(req, res) {
     if (!req.user) {
@@ -132,7 +145,7 @@ async function listManagedBookings(req, res) {
     }
     const resourceIds = await getManagedResourceIds(req.user);
     const bookings = await Booking_1.BookingModel.find({ resourceId: { $in: resourceIds } }).sort({ createdAt: -1 }).limit(500);
-    res.json(bookings);
+    res.json(await (0, manualPayment_service_1.attachManualPayments)(bookings));
 }
 async function listManagedResources(req, res) {
     if (!req.user) {
@@ -184,56 +197,51 @@ async function createManagedBooking(req, res) {
         res.status(403).json({ message: "You cannot book slots for this venue" });
         return;
     }
-    const customer = await User_1.UserModel.findOne((0, userQuery_1.activeUserFilter)({
-        _id: parsed.data.userId,
-        role: roles_1.ROLES.USER,
-    }));
-    if (!customer) {
-        res.status(404).json({ message: "Customer account not found" });
-        return;
-    }
-    const duplicate = await Booking_1.BookingModel.findOne({
-        manualTransactionId: parsed.data.transactionId,
-        paymentStatus: { $in: ["awaiting_approval", "paid", "pending"] },
-    });
-    if (duplicate) {
-        res.status(409).json({ message: "This transaction ID is already used" });
-        return;
+    let customer = null;
+    let bookingUserId = req.user.id;
+    if (parsed.data.userId) {
+        customer = await User_1.UserModel.findOne((0, userQuery_1.activeUserFilter)({
+            _id: parsed.data.userId,
+            role: roles_1.ROLES.USER,
+        }));
+        if (!customer) {
+            res.status(404).json({ message: "Customer account not found" });
+            return;
+        }
+        bookingUserId = customer.id;
     }
     try {
         const booking = await (0, booking_service_1.createBookingAtomic)({
-            userId: customer.id,
+            userId: bookingUserId,
             slotId: parsed.data.slotId,
             idempotencyKey: parsed.data.idempotencyKey,
         });
-        booking.manualTransactionId = parsed.data.transactionId;
-        booking.manualPaymentNote = parsed.data.note ?? "";
-        booking.manualSubmittedAt = new Date();
-        booking.manualReviewNote = "Recorded from dashboard";
-        booking.paymentMethod = "manual";
-        booking.paymentStatus = "paid";
-        booking.bookingStatus = "confirmed";
-        await booking.save();
-        await Payment_1.PaymentModel.findOneAndUpdate({ bookingId: booking._id }, {
-            $set: {
-                userId: booking.userId,
-                amount: booking.amount,
-                provider: "manual",
-                status: "paid",
-                transactionId: parsed.data.transactionId,
-                providerPaymentId: parsed.data.transactionId,
-                gatewayPayload: {
-                    note: parsed.data.note ?? "",
-                    recordedBy: req.user.id,
-                    recordedAt: new Date(),
-                    source: "dashboard",
-                },
-            },
-        }, { upsert: true, new: true });
-        res.status(201).json({
-            message: "Booking created and manual payment recorded",
+        if (parsed.data.guestName && parsed.data.guestPhone) {
+            booking.isWalkIn = true;
+            booking.guestName = parsed.data.guestName;
+            booking.guestPhone = parsed.data.guestPhone;
+        }
+        await (0, manualPayment_service_1.recordManualPaymentTransaction)({
             booking,
-            customer: { id: customer.id, name: customer.name, email: customer.email },
+            amount: parsed.data.amount,
+            paymentMethodCode: parsed.data.paymentMethodCode,
+            transactionId: parsed.data.transactionId,
+            note: parsed.data.note,
+            recordedBy: req.user.id,
+            source: "dashboard",
+            autoApprove: true,
+        });
+        booking.manualReviewNote = "Recorded from dashboard";
+        (0, manualPayment_service_1.confirmBookingIfAnyPayment)(booking);
+        await booking.save();
+        const enriched = (await (0, manualPayment_service_1.attachManualPayments)([booking]))[0];
+        const customerInfo = customer
+            ? { id: customer.id, name: customer.name, email: customer.email }
+            : { name: parsed.data.guestName, phone: parsed.data.guestPhone, walkIn: true };
+        res.status(201).json({
+            message: "Booking created and payment recorded",
+            booking: enriched,
+            customer: customerInfo,
         });
     }
     catch (error) {
@@ -259,43 +267,78 @@ async function submitManualPayment(req, res) {
         res.status(404).json({ message: "Pending booking not found" });
         return;
     }
-    if (!["manual_pending", "failed"].includes(booking.paymentStatus)) {
+    if (!["manual_pending", "failed", "partial_paid"].includes(booking.paymentStatus)) {
         res.status(400).json({ message: "Manual payment cannot be submitted for this booking" });
         return;
     }
-    const duplicate = await Booking_1.BookingModel.findOne({
-        manualTransactionId: parsed.data.transactionId,
-        _id: { $ne: booking._id },
-        paymentStatus: { $in: ["awaiting_approval", "paid", "pending"] },
-    });
-    if (duplicate) {
-        res.status(409).json({ message: "This transaction ID is already used" });
+    try {
+        await (0, manualPayment_service_1.recordManualPaymentTransaction)({
+            booking,
+            amount: parsed.data.amount,
+            paymentMethodCode: parsed.data.paymentMethodCode,
+            transactionId: parsed.data.transactionId,
+            note: parsed.data.note,
+            recordedBy: req.user.id,
+            source: "customer",
+            autoApprove: false,
+        });
+        booking.manualSubmittedAt = new Date();
+        await booking.save();
+        const enriched = (await (0, manualPayment_service_1.attachManualPayments)([booking]))[0];
+        res.json({
+            message: "Payment submitted for review. Owner or staff will verify your payment.",
+            booking: enriched,
+        });
+    }
+    catch (error) {
+        res.status(400).json({ message: error instanceof Error ? error.message : "Payment submission failed" });
+    }
+}
+async function recordBookingPayment(req, res) {
+    if (!req.user) {
+        res.status(401).json({ message: "Unauthorized" });
         return;
     }
-    booking.manualTransactionId = parsed.data.transactionId;
-    booking.manualPaymentNote = parsed.data.note ?? "";
-    booking.manualSubmittedAt = new Date();
-    booking.paymentMethod = "manual";
-    booking.paymentStatus = "awaiting_approval";
-    await booking.save();
-    await Payment_1.PaymentModel.findOneAndUpdate({ bookingId: booking._id }, {
-        $set: {
-            userId: booking.userId,
-            amount: booking.amount,
-            provider: "manual",
-            status: "initiated",
+    const parsed = recordPaymentSchema.safeParse(req.body);
+    if (!parsed.success) {
+        res.status(400).json({ message: parsed.error.flatten() });
+        return;
+    }
+    const booking = await Booking_1.BookingModel.findById(req.params.bookingId);
+    if (!booking) {
+        res.status(404).json({ message: "Booking not found" });
+        return;
+    }
+    if (!(await assertCanManageBooking(req.user, booking))) {
+        res.status(403).json({ message: "You cannot manage this booking" });
+        return;
+    }
+    if (["refunded", "pending"].includes(booking.paymentStatus)) {
+        res.status(400).json({ message: "Cannot record manual payment for this booking" });
+        return;
+    }
+    try {
+        await (0, manualPayment_service_1.recordManualPaymentTransaction)({
+            booking,
+            amount: parsed.data.amount,
+            paymentMethodCode: parsed.data.paymentMethodCode,
             transactionId: parsed.data.transactionId,
-            providerPaymentId: parsed.data.transactionId,
-            gatewayPayload: {
-                note: parsed.data.note ?? "",
-                submittedAt: booking.manualSubmittedAt,
-            },
-        },
-    }, { upsert: true, new: true });
-    res.json({
-        message: "Payment submitted for review. Owner or staff will verify your transaction ID.",
-        booking,
-    });
+            note: parsed.data.note,
+            recordedBy: req.user.id,
+            source: "dashboard",
+            autoApprove: true,
+        });
+        (0, manualPayment_service_1.confirmBookingIfAnyPayment)(booking);
+        await booking.save();
+        const enriched = (await (0, manualPayment_service_1.attachManualPayments)([booking]))[0];
+        res.json({
+            message: "Payment recorded",
+            booking: enriched,
+        });
+    }
+    catch (error) {
+        res.status(400).json({ message: error instanceof Error ? error.message : "Could not record payment" });
+    }
 }
 async function reviewManualPayment(req, res) {
     if (!req.user) {
@@ -316,57 +359,62 @@ async function reviewManualPayment(req, res) {
         res.status(403).json({ message: "You cannot manage this booking" });
         return;
     }
-  if (!(await assertCanManageBooking(req.user, booking))) {
-        res.status(403).json({ message: "You cannot manage this booking" });
-        return;
-    }
     if (booking.paymentStatus !== "awaiting_approval") {
         res.status(400).json({ message: "No manual payment awaiting approval" });
         return;
     }
-    const payment = await Payment_1.PaymentModel.findOne({ bookingId: booking._id, provider: "manual" });
-    if (parsed.data.action === "approve") {
-        booking.paymentStatus = "paid";
-        booking.bookingStatus = "confirmed";
-        if (parsed.data.note) {
-            booking.manualReviewNote = parsed.data.note;
-        }
-        if (payment) {
-            payment.status = "paid";
-            payment.gatewayPayload = {
-                ...(payment.gatewayPayload ?? {}),
-                reviewedAt: new Date(),
-                reviewedBy: req.user.id,
-                action: "approve",
-                note: parsed.data.note ?? "",
-            };
-            await payment.save();
-        }
+    let pending = null;
+    if (parsed.data.manualPaymentId) {
+        pending = await ManualPaymentTransaction_1.ManualPaymentTransactionModel.findOne({
+            _id: parsed.data.manualPaymentId,
+            bookingId: booking._id,
+            status: "pending",
+        });
     }
     else {
-        booking.paymentStatus = "failed";
-        booking.bookingStatus = "cancelled";
-        if (parsed.data.note) {
-            booking.manualReviewNote = parsed.data.note;
-        }
-        if (payment) {
-            payment.status = "failed";
-            payment.gatewayPayload = {
-                ...(payment.gatewayPayload ?? {}),
-                reviewedAt: new Date(),
-                reviewedBy: req.user.id,
-                action: "reject",
-                note: parsed.data.note ?? "",
-            };
-            await payment.save();
-        }
-        await Slot_1.SlotModel.findByIdAndUpdate(booking.slotId, { $set: { status: "available" } });
+        pending = await ManualPaymentTransaction_1.ManualPaymentTransactionModel.findOne({
+            bookingId: booking._id,
+            status: "pending",
+        }).sort({ createdAt: 1 });
     }
-    await booking.save();
-    res.json({
-        message: parsed.data.action === "approve" ? "Manual payment approved" : "Manual payment rejected",
-        booking,
-    });
+    if (!pending) {
+        res.status(400).json({ message: "No pending payment to review" });
+        return;
+    }
+    try {
+        if (parsed.data.action === "approve") {
+            await (0, manualPayment_service_1.approvePendingTransaction)(booking, pending._id, req.user.id, parsed.data.note);
+            if (parsed.data.note) {
+                booking.manualReviewNote = parsed.data.note;
+            }
+            (0, manualPayment_service_1.confirmBookingIfAnyPayment)(booking);
+            await booking.save();
+        }
+        else {
+            await (0, manualPayment_service_1.rejectPendingTransaction)(booking, pending._id, req.user.id, parsed.data.note);
+            if (parsed.data.note) {
+                booking.manualReviewNote = parsed.data.note;
+            }
+            const stillPending = await ManualPaymentTransaction_1.ManualPaymentTransactionModel.countDocuments({
+                bookingId: booking._id,
+                status: "pending",
+            });
+            if (stillPending === 0 && (booking.amountPaid ?? 0) <= 0) {
+                booking.paymentStatus = "failed";
+                booking.bookingStatus = "cancelled";
+                await Slot_1.SlotModel.findByIdAndUpdate(booking.slotId, { $set: { status: "available" } });
+            }
+            await booking.save();
+        }
+        const enriched = (await (0, manualPayment_service_1.attachManualPayments)([booking]))[0];
+        res.json({
+            message: parsed.data.action === "approve" ? "Manual payment approved" : "Manual payment rejected",
+            booking: enriched,
+        });
+    }
+    catch (error) {
+        res.status(400).json({ message: error instanceof Error ? error.message : "Review failed" });
+    }
 }
 async function updateBookingStatus(req, res) {
     if (!req.user) {
@@ -387,14 +435,17 @@ async function updateBookingStatus(req, res) {
         res.status(403).json({ message: "You cannot manage this booking" });
         return;
     }
-    if (!(await assertCanManageBooking(req.user, booking))) {
-        res.status(403).json({ message: "You cannot manage this booking" });
-        return;
+    if (parsed.data.bookingStatus === "confirmed") {
+        const blockedStatuses = ["awaiting_approval", "pending"];
+        if (blockedStatuses.includes(booking.paymentStatus)) {
+            res.status(400).json({ message: "Payment must be verified before confirming this booking" });
+            return;
+        }
     }
-    booking.bookingStatus = parsed.data.bookingStatus;
-    if (parsed.data.paymentStatus) {
+    else if (parsed.data.paymentStatus) {
         booking.paymentStatus = parsed.data.paymentStatus;
     }
+    booking.bookingStatus = parsed.data.bookingStatus;
     if (parsed.data.bookingStatus === "confirmed") {
         const slot = await Slot_1.SlotModel.findById(booking.slotId);
         if (!slot) {
@@ -424,6 +475,9 @@ async function updateBookingStatus(req, res) {
     await booking.save();
     if (parsed.data.bookingStatus === "cancelled" || parsed.data.bookingStatus === "refunded") {
         await Slot_1.SlotModel.findByIdAndUpdate(booking.slotId, { $set: { status: "available" } });
+    }
+    if (parsed.data.paymentStatus === "refunded" || parsed.data.bookingStatus === "refunded") {
+        await Payment_1.PaymentModel.findOneAndUpdate({ bookingId: booking._id }, { $set: { status: "refunded" } });
     }
     res.json(booking);
 }

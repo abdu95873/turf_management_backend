@@ -4,12 +4,16 @@ exports.BookingModel = void 0;
 const mongoose_1 = require("mongoose");
 const bookingSchema = new mongoose_1.Schema({
     userId: { type: mongoose_1.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    isWalkIn: { type: Boolean, default: false, index: true },
+    guestName: { type: String, trim: true, maxlength: 80 },
+    guestPhone: { type: String, trim: true, maxlength: 20 },
     resourceId: { type: mongoose_1.Schema.Types.ObjectId, ref: "Resource", required: true, index: true },
     slotId: { type: mongoose_1.Schema.Types.ObjectId, ref: "Slot", required: true, unique: true, index: true },
     bookingDate: { type: String, required: true, index: true },
     startTime: { type: String, required: true },
     endTime: { type: String, required: true },
     amount: { type: Number, required: true, min: 0 },
+    amountPaid: { type: Number, default: 0, min: 0 },
     commission: { type: Number, default: 0, min: 0 },
     bookingStatus: {
         type: String,
@@ -19,7 +23,7 @@ const bookingSchema = new mongoose_1.Schema({
     },
     paymentStatus: {
         type: String,
-        enum: ["pending", "paid", "failed", "refunded", "manual_pending", "awaiting_approval"],
+        enum: ["pending", "paid", "failed", "refunded", "manual_pending", "partial_paid", "awaiting_approval"],
         default: "manual_pending",
         index: true,
     },

@@ -135,15 +135,35 @@ async function updateStaff(req, res) {
         },
     });
 }
+function buildBookingDateMatch(from, to) {
+    if (!from && !to) {
+        return {};
+    }
+    const bookingDate = {};
+    if (from) {
+        bookingDate.$gte = String(from);
+    }
+    if (to) {
+        bookingDate.$lte = String(to);
+    }
+    return { bookingDate };
+}
 async function getOwnerEarnings(req, res) {
     if (!req.user) {
         res.status(401).json({ message: "Unauthorized" });
         return;
     }
+    const from = typeof req.query.from === "string" ? req.query.from.trim() : "";
+    const to = typeof req.query.to === "string" ? req.query.to.trim() : "";
     const resources = await Resource_1.ResourceModel.find({ ownerId: req.user.id }).select("_id");
     const resourceIds = resources.map((item) => item._id);
     const agg = await Booking_1.BookingModel.aggregate([
-        { $match: { resourceId: { $in: resourceIds } } },
+        {
+            $match: {
+                resourceId: { $in: resourceIds },
+                ...buildBookingDateMatch(from, to),
+            },
+        },
         {
             $group: {
                 _id: "$bookingStatus",
@@ -162,5 +182,11 @@ async function getOwnerEarnings(req, res) {
     for (const row of agg) {
         response[row._id] = { count: row.count, totalAmount: row.totalAmount };
     }
+    const confirmed = response.confirmed.totalAmount;
+    const pending = response.pending.totalAmount;
+    const noShow = response.no_show.totalAmount;
+    response.grossRevenue = confirmed + pending + noShow;
+    response.netRevenue = confirmed + noShow;
+    response.dateFilter = { from: from || null, to: to || null };
     res.json(response);
 }

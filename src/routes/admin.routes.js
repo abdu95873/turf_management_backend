@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const admin_controller_1 = require("../controllers/admin.controller");
+const paymentMethod_controller_1 = require("../controllers/paymentMethod.controller");
 const permissions_1 = require("../constants/permissions");
 const auth_middleware_1 = require("../middlewares/auth.middleware");
 const rbac_middleware_1 = require("../middlewares/rbac.middleware");
@@ -17,4 +18,7 @@ router.get("/commission", admin_controller_1.getCommission);
 router.put("/commission", admin_controller_1.updateCommission);
 router.get("/resources", admin_controller_1.listAllResources);
 router.put("/resources/:resourceId/commission", admin_controller_1.updateResourceCommission);
+router.get("/payment-methods", paymentMethod_controller_1.listPaymentMethods);
+router.post("/payment-methods", paymentMethod_controller_1.createPaymentMethod);
+router.patch("/payment-methods/:methodId", paymentMethod_controller_1.updatePaymentMethod);
 exports.default = router;

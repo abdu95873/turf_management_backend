@@ -15,6 +15,7 @@ router.get("/manage/resources", auth_middleware_1.requireAuth, (0, rbac_middlewa
 router.get("/manage/customers", auth_middleware_1.requireAuth, (0, rbac_middleware_1.requirePermission)(permissions_1.PERMISSIONS.BOOKING_UPDATE_STATUS), booking_controller_1.lookupCustomers);
 router.post("/manage", auth_middleware_1.requireAuth, (0, rbac_middleware_1.requirePermission)(permissions_1.PERMISSIONS.BOOKING_UPDATE_STATUS), booking_controller_1.createManagedBooking);
 router.patch("/:bookingId/manual-review", auth_middleware_1.requireAuth, (0, rbac_middleware_1.requirePermission)(permissions_1.PERMISSIONS.BOOKING_UPDATE_STATUS), booking_controller_1.reviewManualPayment);
+router.post("/:bookingId/record-payment", auth_middleware_1.requireAuth, (0, rbac_middleware_1.requirePermission)(permissions_1.PERMISSIONS.BOOKING_UPDATE_STATUS), booking_controller_1.recordBookingPayment);
 router.patch("/:bookingId/status", auth_middleware_1.requireAuth, (0, rbac_middleware_1.requirePermission)(permissions_1.PERMISSIONS.BOOKING_UPDATE_STATUS), booking_controller_1.updateBookingStatus);
 router.get("/me/:bookingId/invoice", auth_middleware_1.requireAuth, (0, rbac_middleware_1.requirePermission)(permissions_1.PERMISSIONS.BOOKING_VIEW), booking_controller_1.downloadInvoice);
 exports.default = router;
