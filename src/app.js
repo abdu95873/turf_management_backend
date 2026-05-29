@@ -16,8 +16,18 @@ const review_routes_1 = __importDefault(require("./routes/review.routes"));
 const resource_routes_1 = __importDefault(require("./routes/resource.routes"));
 const slot_routes_1 = __importDefault(require("./routes/slot.routes"));
 const event_routes_1 = __importDefault(require("./routes/event.routes"));
+const db_1 = require("./config/db");
 exports.app = (0, express_1.default)();
 exports.app.use((0, cors_1.default)());
+exports.app.use(async (_req, _res, next) => {
+    try {
+        await (0, db_1.connectDB)();
+        next();
+    }
+    catch (error) {
+        next(error);
+    }
+});
 exports.app.use(express_1.default.urlencoded({ extended: false }));
 exports.app.use(express_1.default.json({
     verify: (req, _res, buf) => {
@@ -37,3 +47,10 @@ exports.app.use("/api/resources", resource_routes_1.default);
 exports.app.use("/api/slots", slot_routes_1.default);
 exports.app.use("/api/bookings", booking_routes_1.default);
 exports.app.use("/api/events", event_routes_1.default);
+exports.app.use((err, _req, res, _next) => {
+    console.error("Server error:", err?.message ?? err);
+    const status = err?.statusCode && Number.isInteger(err.statusCode) ? err.statusCode : 500;
+    res.status(status).json({
+        message: status === 500 ? "Internal server error" : err?.message ?? "Request failed",
+    });
+});

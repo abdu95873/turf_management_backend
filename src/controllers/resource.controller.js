@@ -18,7 +18,10 @@ const createResourceSchema = zod_1.z.object({
     longitude: zod_1.z.number(),
     latitude: zod_1.z.number(),
     facilities: zod_1.z.array(zod_1.z.string()).default([]),
-    images: zod_1.z.array(zod_1.z.string().url()).default([]),
+    images: zod_1.z
+        .array(zod_1.z.string().trim().min(1))
+        .default([])
+        .transform((urls) => urls.filter((url) => /^https?:\/\//i.test(url))),
     pricePerHour: zod_1.z.number().nonnegative(),
     minimumBookingAmount: zod_1.z.number().nonnegative().optional(),
     ownerId: zod_1.z.string().optional(),
