@@ -16,6 +16,7 @@ const { WebhookEventLogModel } = require("../models/WebhookEventLog");
 const { WebhookNonceModel } = require("../models/WebhookNonce");
 const { hashPassword } = require("../utils/password");
 const { ROLES } = require("../constants/roles");
+const { slugifyName } = require("../utils/venueSlug");
 
 const ITEM_COUNT = 5;
 
@@ -55,6 +56,7 @@ async function main() {
   const resources = await ResourceModel.insertMany(
     Array.from({ length: ITEM_COUNT }, (_, index) => ({
       name: `Demo Resource ${index + 1}`,
+      slug: `${slugifyName(`Demo Resource ${index + 1}`)}${index + 1}`,
       type: ["turf", "pool", "sports"][index % 3],
       ownerId: owners[index]._id,
       locationName: `Dhaka Zone ${index + 1}`,

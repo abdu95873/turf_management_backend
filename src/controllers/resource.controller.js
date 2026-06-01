@@ -11,8 +11,15 @@ const Resource_1 = require("../models/Resource");
 const Review_1 = require("../models/Review");
 const User_1 = require("../models/User");
 const roles_1 = require("../constants/roles");
+const venueSlug_1 = require("../utils/venueSlug");
+const slugFieldSchema = zod_1.z
+    .string()
+    .min(3, "Venue URL must be at least 3 characters")
+    .max(48)
+    .regex(/^[a-z0-9]+$/, "Venue URL can only use lowercase letters and numbers");
 const createResourceSchema = zod_1.z.object({
     name: zod_1.z.string().min(2),
+    slug: slugFieldSchema.optional(),
     type: zod_1.z.enum(["turf", "pool", "sports"]),
     locationName: zod_1.z.string().min(2),
     longitude: zod_1.z.number(),
@@ -30,11 +37,14 @@ const createResourceSchema = zod_1.z.object({
 const updatePriceSchema = zod_1.z.object({
     pricePerHour: zod_1.z.number().nonnegative(),
 });
-const updateSettingsSchema = zod_1.z.object({
+const updateSettingsSchema = zod_1.z
+    .object({
     pricePerHour: zod_1.z.number().nonnegative().optional(),
     minimumBookingAmount: zod_1.z.number().nonnegative().optional(),
-}).refine((data) => data.pricePerHour !== undefined || data.minimumBookingAmount !== undefined, {
-    message: "Provide pricePerHour and/or minimumBookingAmount",
+    slug: slugFieldSchema.optional(),
+})
+    .refine((data) => data.pricePerHour !== undefined || data.minimumBookingAmount !== undefined || data.slug !== undefined, {
+    message: "Provide pricePerHour, minimumBookingAmount, and/or slug",
 });
 async function createResource(req, res) {
     const parsed = createResourceSchema.safeParse(req.body);
@@ -79,8 +89,19 @@ async function createResource(req, res) {
             return;
         }
     }
+    const preferredSlug = data.slug ? (0, venueSlug_1.normalizeSlugInput)(data.slug) : (0, venueSlug_1.slugifyName)(data.name);
+    if (data.slug && !(0, venueSlug_1.normalizeSlugInput)(data.slug)) {
+        res.status(400).json({ message: "Invalid Venue URL" });
+        return;
+    }
+    if ((0, venueSlug_1.isReservedSlug)(preferredSlug)) {
+        res.status(400).json({ message: "This Venue URL is reserved. Choose another." });
+        return;
+    }
+    const slug = await (0, venueSlug_1.resolveUniqueSlug)(preferredSlug || `venue${Date.now()}`);
     const resource = await Resource_1.ResourceModel.create({
         name: data.name,
+        slug,
         type: data.type,
         ownerId,
         staffIds: validatedStaff.map((staff) => staff._id),
@@ -97,10 +118,11 @@ async function listResources(req, res) {
     const city = req.query.city ? String(req.query.city) : undefined;
     const query = city ? { locationName: new RegExp(city, "i"), isActive: true } : { isActive: true };
     const resources = await Resource_1.ResourceModel.find(query).sort({ createdAt: -1 });
+    await Promise.all(resources.map((resource) => (0, venueSlug_1.ensureResourceSlug)(resource)));
     res.json(resources);
 }
 async function getResourceDetails(req, res) {
-    const resource = await Resource_1.ResourceModel.findById(req.params.resourceId);
+    const resource = await (0, venueSlug_1.findResourceByIdOrSlug)(req.params.resourceId);
     if (!resource) {
         res.status(404).json({ message: "Resource not found" });
         return;
@@ -169,6 +191,22 @@ async function updateResourceSettings(req, res) {
     }
     if (parsed.data.minimumBookingAmount !== undefined) {
         resource.minimumBookingAmount = parsed.data.minimumBookingAmount;
+    }
+    if (parsed.data.slug !== undefined) {
+        if (req.user.role === roles_1.ROLES.STAFF) {
+            res.status(403).json({ message: "Staff cannot change Venue URL" });
+            return;
+        }
+        const normalized = (0, venueSlug_1.normalizeSlugInput)(parsed.data.slug);
+        if (!normalized) {
+            res.status(400).json({ message: "Invalid Venue URL" });
+            return;
+        }
+        if ((0, venueSlug_1.isReservedSlug)(normalized)) {
+            res.status(400).json({ message: "This Venue URL is reserved. Choose another." });
+            return;
+        }
+        resource.slug = await (0, venueSlug_1.resolveUniqueSlug)(normalized, resource._id);
     }
     await resource.save();
     res.json({ message: "Venue settings updated", resource });

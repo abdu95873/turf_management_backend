@@ -8,7 +8,8 @@
     "build": "echo \"No build step required for JavaScript runtime\"",
     "start": "node src/server.js",
     "lint": "node --check src/server.js",
-    "seed:demo": "node src/scripts/seedDemoData.js"
+    "seed:demo": "node src/scripts/seedDemoData.js",
+    "venues:backfill-slugs": "node src/scripts/backfillVenueSlugs.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

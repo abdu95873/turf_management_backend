@@ -4,6 +4,7 @@ exports.ResourceModel = void 0;
 const mongoose_1 = require("mongoose");
 const resourceSchema = new mongoose_1.Schema({
     name: { type: String, required: true, trim: true },
+    slug: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
     type: { type: String, enum: ["turf", "pool", "sports"], required: true, index: true },
     ownerId: { type: mongoose_1.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     staffIds: [{ type: mongoose_1.Schema.Types.ObjectId, ref: "User" }],
